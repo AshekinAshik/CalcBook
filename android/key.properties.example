@@ -1,0 +1,12 @@
+# Copy this file to "key.properties" (same folder) and fill in your real
+# release keystore details. DO NOT commit the real key.properties or your
+# .jks/.keystore file — both are already covered by .gitignore.
+#
+# Generate a keystore first, e.g.:
+#   keytool -genkey -v -keystore ~/calcbook-release.jks -keyalg RSA \
+#     -keysize 2048 -validity 10000 -alias calcbook
+
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=calcbook
+storeFile=/absolute/path/to/calcbook-release.jks

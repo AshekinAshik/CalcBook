@@ -1,0 +1,33 @@
+name: calcbook
+description: "CalcBook — a premium Material 3 calculator with savable Calculation Sheets."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # State management
+  provider: ^6.1.2
+
+  # Persistence (Room-equivalent for Flutter)
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+
+  # Math expression parsing & evaluation (exp4j-equivalent for Dart)
+  math_expressions: ^2.6.0
+
+  # Reorderable sheet list UI
+  google_fonts: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
