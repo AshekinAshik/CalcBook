@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/calculation_history_entry.dart';
 import '../providers/calculator_provider.dart';
+import 'drawer_grabber.dart';
 
 /// The History drawer — every calculation the user has evaluated with
 /// "=" is logged here automatically, independent of the deliberately
@@ -35,15 +36,7 @@ class HistoryDrawer extends StatelessWidget {
       builder: (context, scrollController) {
         return Column(
           children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: scheme.outlineVariant,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
+            const DrawerGrabber(),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
               child: Row(
@@ -164,7 +157,8 @@ class _HistoryTile extends StatelessWidget {
 
   String _formatTime(DateTime t) {
     final now = DateTime.now();
-    final isToday = t.year == now.year && t.month == now.month && t.day == now.day;
+    final isToday =
+        t.year == now.year && t.month == now.month && t.day == now.day;
     final hour = t.hour % 12 == 0 ? 12 : t.hour % 12;
     final minute = t.minute.toString().padLeft(2, '0');
     final ampm = t.hour >= 12 ? 'PM' : 'AM';
@@ -200,7 +194,8 @@ class _HistoryTile extends StatelessWidget {
         color: scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           title: Text(
             entry.expression,
             style: TextStyle(
@@ -209,9 +204,16 @@ class _HistoryTile extends StatelessWidget {
               fontSize: 14,
             ),
           ),
+          // Explicit onSurface color — this previously had no color set
+          // at all, which relied on an ambient default that read poorly
+          // against the card's surfaceContainerLow fill in dark mode.
           subtitle: Text(
             '= ${entry.result}',
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 18,
+              color: scheme.onSurface,
+            ),
           ),
           trailing: Text(
             _formatTime(entry.timestamp),

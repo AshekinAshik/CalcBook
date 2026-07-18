@@ -147,6 +147,17 @@ class CalculatorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Detaches the calculator from the currently loaded sheet, returning
+  /// to plain "free calculation" mode — the current expression is left
+  /// untouched, only the sheet association is cleared. From this point,
+  /// further "=" evaluations log to History as normal, with no implied
+  /// tie to the sheet you just left.
+  void exitActiveSheet() {
+    if (_activeSheetId == null) return;
+    _activeSheetId = null;
+    notifyListeners();
+  }
+
   Future<void> renameSheet(int id, String newTitle) async {
     if (newTitle.trim().isEmpty) return;
     await _db.renameSheet(id, newTitle.trim());

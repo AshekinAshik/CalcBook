@@ -5,7 +5,10 @@ import '../providers/calculator_provider.dart';
 
 /// Shows the live expression trail plus a smaller live-preview result
 /// beneath it, right-aligned in classic calculator style. Also surfaces
-/// a small "active sheet" chip when a saved sheet is currently loaded.
+/// a closable "active sheet" chip when a saved sheet is currently
+/// loaded — tapping the × detaches from the sheet (via
+/// [CalculatorProvider.exitActiveSheet]) without touching the current
+/// expression, returning to plain free-calculation mode.
 class DisplayPanel extends StatelessWidget {
   const DisplayPanel({super.key});
 
@@ -19,7 +22,7 @@ class DisplayPanel extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         mainAxisAlignment: MainAxisAlignment.end,
@@ -28,10 +31,28 @@ class DisplayPanel extends StatelessWidget {
             Align(
               alignment: Alignment.centerLeft,
               child: Chip(
-                label: Text(activeSheet.title),
-                avatar: const Icon(Icons.description_outlined, size: 16),
+                label: Text(
+                  activeSheet.title,
+                  // Explicit "on" color for the custom backgroundColor
+                  // below — Chip's default label style doesn't always
+                  // auto-adapt contrast for a manually-set background,
+                  // which is what caused low-contrast text in dark mode.
+                  style: TextStyle(color: scheme.onSecondaryContainer),
+                ),
+                avatar: Icon(
+                  Icons.description_outlined,
+                  size: 16,
+                  color: scheme.onSecondaryContainer,
+                ),
+                deleteIcon: Icon(
+                  Icons.close,
+                  size: 16,
+                  color: scheme.onSecondaryContainer,
+                ),
+                onDeleted: vm.exitActiveSheet,
                 visualDensity: VisualDensity.compact,
                 backgroundColor: scheme.secondaryContainer,
+                side: BorderSide.none,
               ),
             ),
           const SizedBox(height: 14),
@@ -61,17 +82,6 @@ class DisplayPanel extends StatelessWidget {
               ),
             ),
           ),
-          if (vm.history.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.center,
-              child: Icon(
-                Icons.keyboard_arrow_up_rounded,
-                size: 16,
-                color: scheme.outline.withValues(alpha: 0.5),
-              ),
-            ),
-          ],
         ],
       ),
     );

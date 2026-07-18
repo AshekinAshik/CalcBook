@@ -45,6 +45,13 @@ lib/
 - **History**: swipe up on the display (or tap the History icon in the AppBar) to open a drawer of every past calculation, auto-logged on every "=". Tap to reuse, swipe to delete one, or clear all — independent from your curated Sheets.
 - **System chrome** (status bar / navigation bar icon color) now syncs with light/dark mode automatically via `AppTheme.systemOverlayStyle`.
 
+### Round 2 fixes
+- **Exit a loaded Sheet**: the active-sheet chip on the display is now closable (×) — tapping it calls `CalculatorProvider.exitActiveSheet()`, detaching from the sheet without clearing your current expression, so you can keep calculating in plain (History-logged) mode.
+- **Dark-mode contrast bug fixed**: several widgets (`_SheetTile`, `_HistoryTile`, the active-sheet `Chip`) previously left text color unset and relied on an ambient default, which read poorly against custom `secondaryContainer`/`surfaceContainerLow` fills in dark mode. All of these now use explicit `onSecondaryContainer` / `onSurface` colors that are correct in both themes.
+- **Sheet-title bug fixed**: the "Save as new sheet" dialog's pre-filled suggested name (e.g. "Sheet 1") is now selected on open, so typing replaces it instead of appending — this previously produced titles like "Sheet 1sheet 1".
+- **Clearer swipe-up-for-History affordance**: the old lone up-arrow icon is replaced by a standard drag-handle pill (the same shape used by bottom sheets) that morphs into an explicit "History" label + icon as you drag, in `_HistoryPeekHandle` (`lib/screens/calculator_screen.dart`).
+- **Code cleanup / performance**: extracted the duplicated grabber-bar UI into `lib/widgets/drawer_grabber.dart`; replaced broad `context.watch<CalculatorProvider>()` subscriptions in the button grid and main screen with scoped `context.select`/`context.read`, so keystrokes no longer force the AppBar, Scientific toggle, and all ~25 buttons to rebuild on every tap.
+
 ---
 
 ## 1. Prerequisites

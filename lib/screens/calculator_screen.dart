@@ -9,15 +9,21 @@ import '../widgets/display_panel.dart';
 import '../widgets/sheet_manager_drawer.dart';
 import '../widgets/history_drawer.dart';
 
-/// The primary screen. Redesigned to:
-///  - Never scroll — display + button grid always fit the viewport,
+/// The primary screen:
+///  - Never scrolls — display + button grid always fit the viewport,
 ///    like a standard calculator app.
-///  - Make the Standard/Scientific toggle self-explanatory via a
-///    labeled SegmentedButton instead of an unlabeled switch.
-///  - Keep the Sheets entry point in the AppBar (as a badge icon) so it
-///    never overlaps the button grid.
-///  - Reveal History via a discoverable swipe-up gesture on the display,
-///    with an animated icon reveal, plus a fallback AppBar icon.
+///  - Standard/Scientific toggle is a labeled SegmentedButton, never a
+///    mystery switch.
+///  - Sheets access lives in the AppBar (badge icon), so it never
+///    overlaps the button grid.
+///  - History is revealed via a swipe-up gesture on the display — with
+///    a standard "drag handle + label" affordance instead of a lone,
+///    ambiguous arrow — plus a fallback AppBar icon for discoverability.
+///
+/// Only the AppBar's badge/toggle state is subscribed here via
+/// `context.select`; the display and button grid manage their own
+/// narrower subscriptions, so a keystroke doesn't force this whole
+/// screen (AppBar, SegmentedButton, etc.) to rebuild.
 class CalculatorScreen extends StatefulWidget {
   const CalculatorScreen({super.key});
 
@@ -27,13 +33,13 @@ class CalculatorScreen extends StatefulWidget {
 
 class _CalculatorScreenState extends State<CalculatorScreen> {
   double _dragExtent = 0;
-  static const double _dragThreshold = 70;
+  static const double _dragThreshold = 64;
   bool _historyTriggered = false;
 
   void _onVerticalDragUpdate(DragUpdateDetails details) {
     if (details.delta.dy > 0) return; // only track upward drags
     setState(() {
-      _dragExtent = (_dragExtent - details.delta.dy).clamp(0, 120);
+      _dragExtent = (_dragExtent - details.delta.dy).clamp(0, 100);
     });
   }
 
@@ -49,8 +55,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final vm = context.watch<CalculatorProvider>();
     final scheme = Theme.of(context).colorScheme;
+    final sheetsCount =
+        context.select<CalculatorProvider, int>((vm) => vm.sheets.length);
+    final isScientificMode = context
+        .select<CalculatorProvider, bool>((vm) => vm.isScientificMode);
     final dragFraction = (_dragExtent / _dragThreshold).clamp(0.0, 1.0);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -70,8 +79,8 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 tooltip: 'Calculation Sheets',
                 onPressed: () => SheetManagerDrawer.show(context),
                 icon: Badge(
-                  label: Text('${vm.sheets.length}'),
-                  isLabelVisible: vm.sheets.isNotEmpty,
+                  label: Text('$sheetsCount'),
+                  isLabelVisible: sheetsCount > 0,
                   child: const Icon(Icons.folder_copy_outlined),
                 ),
               ),
@@ -98,10 +107,10 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                       icon: Icon(Icons.functions, size: 18),
                     ),
                   ],
-                  selected: {vm.isScientificMode},
+                  selected: {isScientificMode},
                   onSelectionChanged: (selection) {
-                    if (selection.first != vm.isScientificMode) {
-                      vm.toggleScientificMode();
+                    if (selection.first != isScientificMode) {
+                      context.read<CalculatorProvider>().toggleScientificMode();
                     }
                   },
                   style: const ButtonStyle(
@@ -111,7 +120,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               ),
 
               // Display area — flexible, and carries the swipe-up
-              // gesture that reveals History with an animated icon.
+              // gesture that reveals History.
               Expanded(
                 flex: 2,
                 child: GestureDetector(
@@ -125,31 +134,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                       Positioned(
                         left: 0,
                         right: 0,
-                        bottom: 4,
+                        bottom: 6,
                         child: IgnorePointer(
-                          child: AnimatedOpacity(
-                            opacity: dragFraction,
-                            duration: const Duration(milliseconds: 80),
-                            child: AnimatedScale(
-                              scale: 0.7 + 0.3 * dragFraction,
-                              duration: const Duration(milliseconds: 80),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.keyboard_arrow_up_rounded,
-                                    color: scheme.primary,
-                                    size: 28,
-                                  ),
-                                  Icon(
-                                    Icons.history,
-                                    color: scheme.primary,
-                                    size: 22,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
+                          child: _HistoryPeekHandle(dragFraction: dragFraction),
                         ),
                       ),
                     ],
@@ -170,6 +157,67 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The swipe-up-for-History affordance shown at the bottom of the
+/// display. At rest it's a small, standard "drag handle" pill — the
+/// same universally-recognized shape used by bottom sheets — which by
+/// itself is a more familiar "there's more here" cue than a lone arrow
+/// icon. As the user drags, it morphs into an explicit label ("History"
+/// + icon) so there's no ambiguity about what's about to open.
+class _HistoryPeekHandle extends StatelessWidget {
+  final double dragFraction;
+  const _HistoryPeekHandle({required this.dragFraction});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Explicit label + icon, fades and slides in only once the user
+        // has committed to the gesture.
+        AnimatedOpacity(
+          opacity: dragFraction,
+          duration: const Duration(milliseconds: 100),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.history, size: 16, color: scheme.primary),
+                const SizedBox(width: 4),
+                Text(
+                  'History',
+                  style: TextStyle(
+                    color: scheme.primary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // The persistent handle pill — always faintly visible so the
+        // gesture is discoverable even before the user starts dragging.
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          width: 36 + (8 * dragFraction),
+          height: 4,
+          decoration: BoxDecoration(
+            color: Color.lerp(
+              scheme.outlineVariant,
+              scheme.primary,
+              dragFraction,
+            ),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+      ],
     );
   }
 }

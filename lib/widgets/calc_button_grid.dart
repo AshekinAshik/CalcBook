@@ -15,10 +15,18 @@ class CalcButtonGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final vm = context.watch<CalculatorProvider>();
+    // `read` for the instance used by key callbacks (doesn't subscribe —
+    // the provider object itself never changes), `select` for the one
+    // field that should actually trigger a rebuild here. Previously this
+    // used a broad `watch`, which rebuilt all ~25 button widgets on
+    // every single keystroke even though only the Scientific toggle
+    // ever changes what this grid renders.
+    final vm = context.read<CalculatorProvider>();
+    final isScientificMode =
+        context.select<CalculatorProvider, bool>((p) => p.isScientificMode);
 
     final rows = <List<_KeySpec>>[
-      if (vm.isScientificMode) ..._scientificRows(vm),
+      if (isScientificMode) ..._scientificRows(vm),
       ..._standardRows(vm),
     ];
 
