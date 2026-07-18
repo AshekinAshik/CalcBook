@@ -25,7 +25,7 @@ class CalcButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.role = CalcButtonRole.number,
-    this.fontSize = 24,
+    this.fontSize = 22,
     this.icon,
   });
 
@@ -63,7 +63,7 @@ class CalcButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.all(5),
+      padding: const EdgeInsets.all(4),
       child: Material(
         color: _bg(scheme),
         borderRadius: BorderRadius.circular(20),

@@ -117,6 +117,6 @@ class _KeySpec {
     this.label,
     this.onTap, {
     this.role = CalcButtonRole.number,
-    this.fontSize = 24,
+    this.fontSize = 22,
   });
 }

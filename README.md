@@ -45,6 +45,17 @@ lib/
 - **History**: swipe up on the display (or tap the History icon in the AppBar) to open a drawer of every past calculation, auto-logged on every "=". Tap to reuse, swipe to delete one, or clear all — independent from your curated Sheets.
 - **System chrome** (status bar / navigation bar icon color) now syncs with light/dark mode automatically via `AppTheme.systemOverlayStyle`.
 
+### Round 3 fixes
+- **Calculation engine rewritten from scratch** (`lib/services/expression_evaluator.dart`): replaced the `math_expressions`-based evaluator with a hand-written, dependency-free recursive-descent parser. The old library had no defined behavior for `%` at all (it simply errored), and gave no guarantee its `log`/`ln` matched calculator convention — so scientific results could be silently wrong even without erroring. The new evaluator:
+  - Implements `%` with standard calculator semantics: `A + B%` / `A - B%` takes B% *of A* (`100+10% = 110`), while `A × B%` / `A ÷ B%` treats it as a literal `B/100` (`50×10% = 5`); a bare `B%` is `B/100`.
+  - Uses `log` = base-10, `ln` = natural log (previously unverified/possibly swapped).
+  - Correctly handles operator precedence including the classic `-2^2 = -4` vs. `(-2)^2 = 4` distinction that matches real scientific calculators.
+  - Supports implicit multiplication (`2π`, `2(3+4)`, `2sin(30)`) like real calculator apps.
+  - Guards `tan()` near its undefined asymptotes (90°, 270°, ...) instead of returning a meaningless huge number.
+  - Verified against a 20-case test battery (basic arithmetic, all percent variants, power/precedence edge cases, all scientific functions, implicit multiplication, division-by-zero, incomplete-expression handling) before shipping.
+  - Also removes the `math_expressions` package dependency entirely — smaller, faster build.
+- **Keypad resized for better breathing room**: display/grid flex ratio changed from ~29/71 to ~43/57 in Standard mode (Scientific mode keeps a bit more grid room — ~29/71 — since it has two extra rows to fit), matching standard mobile calculator display-to-keypad proportions. Button padding and font size were tightened slightly to keep the now-smaller keys looking clean rather than cramped.
+
 ### Round 2 fixes
 - **Exit a loaded Sheet**: the active-sheet chip on the display is now closable (×) — tapping it calls `CalculatorProvider.exitActiveSheet()`, detaching from the sheet without clearing your current expression, so you can keep calculating in plain (History-logged) mode.
 - **Dark-mode contrast bug fixed**: several widgets (`_SheetTile`, `_HistoryTile`, the active-sheet `Chip`) previously left text color unset and relied on an ambient default, which read poorly against custom `secondaryContainer`/`surfaceContainerLow` fills in dark mode. All of these now use explicit `onSecondaryContainer` / `onSurface` colors that are correct in both themes.

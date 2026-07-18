@@ -120,9 +120,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               ),
 
               // Display area — flexible, and carries the swipe-up
-              // gesture that reveals History.
+              // gesture that reveals History. Given a larger flex share
+              // than before so the calculation area has real breathing
+              // room, matching standard mobile calculator proportions
+              // (roughly 40/60 display-to-keypad in Standard mode).
               Expanded(
-                flex: 2,
+                flex: isScientificMode ? 2 : 3,
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onVerticalDragUpdate: _onVerticalDragUpdate,
@@ -144,10 +147,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                 ),
               ),
 
-              // Button grid — fixed proportion of the remaining space,
-              // never causes the page to scroll.
+              // Button grid — a smaller proportion of the remaining
+              // space than before (never causes the page to scroll).
+              // Scientific mode gets a bit more room since it has two
+              // extra rows to fit.
               Expanded(
-                flex: 5,
+                flex: isScientificMode ? 5 : 4,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: const CalcButtonGrid(),
