@@ -45,6 +45,34 @@ lib/
 - **History**: swipe up on the display (or tap the History icon in the AppBar) to open a drawer of every past calculation, auto-logged on every "=". Tap to reuse, swipe to delete one, or clear all — independent from your curated Sheets.
 - **System chrome** (status bar / navigation bar icon color) now syncs with light/dark mode automatically via `AppTheme.systemOverlayStyle`.
 
+### Round 8 — second sanity-check pass
+This pass specifically hunted for second-order UX surprises rather than re-checking what Round 7 already covered. Five real issues found and fixed:
+- **"AC" was silently exiting the active sheet.** `clearAll()` reset `activeSheetId` to null as a side effect, meaning clearing a mistyped number while working in a sheet would unexpectedly detach you from it — even though there's a dedicated, explicit × on the sheet chip for that. AC now only clears the display, full stop.
+- **Orientation wasn't locked.** The entire layout (flex ratios, dialog sizing, button proportions) was designed portrait-only; rotating to landscape would have produced a genuinely cramped, broken-looking layout. Locked via `android:screenOrientation="portrait"`.
+- **Long sheet titles could overflow.** The list tile's title `Text` had no `maxLines`/`overflow` (unlike the expression/description lines right below it, which already had this), and the active-sheet chip on the display had no width constraint at all — `overflow: TextOverflow.ellipsis` does nothing without a bounded width to ellipsize against. Both fixed; added a 60-character title cap (`CalculationSheet.maxTitleLength`) as a second line of defense, enforced both in the dialog's `TextField` and in the provider (`_clampTitle`), mirroring how description was already capped.
+- **Editing a sheet with an empty title failed completely silently.** `updateSheetDetails` would just `return` early with zero feedback — the dialog had already closed, so the user had no idea their edit wasn't saved. The Save/Edit dialog is now a `StatefulBuilder` that shows an inline "Title is required" error and disables the confirm button until the title is non-empty, so this can't happen anymore — it's prevented at the point of submission instead of failing silently afterward.
+
+### Round 7 — production readiness audit
+Full sanity pass across the whole app; see `CalcBook_Production_Readiness_Audit.md` for the complete report. Two real bugs were found and fixed:
+- **CI would have failed**: `.github/workflows/build_apk.yml` was still pinned to Flutter 3.24.0, which predates `DialogThemeData` (required since 3.32, used in `app_theme.dart` since Round 4). Bumped to 3.44.6.
+- **`flutter test` would have failed**: `CalculatorProvider` talks to `sqflite` on construction, but plain `flutter test` has no platform channel for it. Added `sqflite_common_ffi` as a dev dependency and initialized it in `test/widget_test.dart`; also hardened the provider's startup DB loading with try/catch so a DB-open failure can't crash the app on launch, and expanded the test suite from 2 to 3 test cases.
+
+Also verified (no changes needed): the calculation engine against a 46-case test battery, both DB migration paths against real SQLite, cascade-delete behavior, every provider method has exactly one real UI call site, all imports resolve, package naming is consistent across Gradle/Kotlin/Manifest, and Gradle/AGP/Kotlin/SDK versions remain mutually compatible.
+
+### Round 6 fixes
+- **Save/Edit sheet dialog no longer resizes while typing**: the dialog previously had no explicit width constraint, so the description field's `maxLength` counter text (e.g. "123/250") could make the dialog's intrinsic width grow as you typed. It's now a fixed 360×200 landscape-ratio box (`SizedBox` + `SingleChildScrollView` in `_showSheetDetailsDialog`, `lib/widgets/sheet_manager_drawer.dart`) — stays the same size regardless of what's typed, and the scroll view keeps it safe from overflow if the keyboard shrinks available space.
+- **Background no longer shifts when the Edit-sheet keyboard opens**: the main calculator `Scaffold` was reacting to the keyboard's viewInset even though the actual text field lives in a dialog on top, which handles its own keyboard avoidance independently. Set `resizeToAvoidBottomInset: false` on the main screen's `Scaffold` (`lib/screens/calculator_screen.dart`) — the calculator screen has no text inputs of its own, so it never needs to respond to the keyboard.
+
+### Round 5 — new features
+- **Sheet descriptions**: sheets now have an optional short description (max 250 chars) alongside the title. Editing a sheet (tap the edit icon) opens a dedicated "Edit sheet" dialog for both fields, replacing the old inline-rename swap — a multi-line description doesn't fit cleanly into an inline `ListTile` edit, so a small dialog (shared with the "Save as new sheet" flow, via `_showSheetDetailsDialog`) keeps both flows consistent. The description shows as a compact, muted, max-2-line preview under the sheet's expression in the list — capped so it can never dominate the row or make the list feel cluttered.
+- **Two-scope history**: History is now split into *General* history (calculations made outside any sheet) and each sheet's *own* history — logged automatically based on whichever sheet (if any) was active when "=" was pressed (`CalculatorProvider._logHistory` tags each entry with `sheetId`). "Clear all" only ever clears the list currently showing, never both.
+- **Context-aware swipe-up**: swiping up on the display (or tapping the AppBar History icon) opens *General* history when no sheet is loaded, or *that sheet's* history when one is — same gesture, contextually correct target. The swipe-up hint label and AppBar tooltip both reflect which one you're about to get.
+- Data model: `CalculationSheet` gained `description`; `CalculationHistoryEntry` gained nullable `sheetId`. DB schema bumped to v3 with a migration that backfills both on existing installs (`ALTER TABLE ... ADD COLUMN`) — no data loss, no manual steps needed on upgrade. Deleting a sheet now also deletes its own history in the same batch, so it's never orphaned.
+
+### Round 4 fixes
+- **Dark/light contrast — actual root cause fixed** (`lib/theme/app_theme.dart`): the app's global `textTheme` was built via `GoogleFonts.interTextTheme()` with **no base argument**, which silently defaults to a fixed, light-mode/near-black baseline regardless of the app's real brightness. Any `Text` widget that didn't explicitly set its own color — dialog titles, drawer headers, list content, etc. — was rendering near-black text even in dark mode. Round 2's fixes patched a few specific widgets but missed this systemic cause. Fixed by building the base `ThemeData` from the `ColorScheme` first (which gives Flutter's own correctly brightness-aware text colors) and layering `GoogleFonts` on top of *that*, so it only changes font family/weight and keeps the color it's given. Also added explicit `dialogTheme` and `listTileTheme` overrides so dialogs and list content are correct by default too.
+- **APK size**: removed the unused `cupertino_icons` dependency; confirmed `minifyEnabled`/`shrinkResources` are on for release builds; and the recommended build command is now `flutter build apk --release --split-per-abi`, which typically roughly halves download size by not bundling every CPU architecture into one file. See "APK size" under step 3 below for details — no app behavior changed, this is purely a build-configuration improvement.
+
 ### Round 3 fixes
 - **Calculation engine rewritten from scratch** (`lib/services/expression_evaluator.dart`): replaced the `math_expressions`-based evaluator with a hand-written, dependency-free recursive-descent parser. The old library had no defined behavior for `%` at all (it simply errored), and gave no guarantee its `log`/`ln` matched calculator convention — so scientific results could be silently wrong even without erroring. The new evaluator:
   - Implements `%` with standard calculator semantics: `A + B%` / `A - B%` takes B% *of A* (`100+10% = 110`), while `A × B%` / `A ÷ B%` treats it as a literal `B/100` (`50×10% = 5`); a bare `B%` is `B/100`.
@@ -115,29 +143,63 @@ Then in VS Code:
 
 ## 3. Generate a release `.apk`
 
-From the project root:
-
-```bash
-flutter build apk --release
-```
-
-The signed (debug-key by default — see signing note below) APK is written to:
-
-```
-build/app/outputs/flutter-apk/app-release.apk
-```
-
-Copy that file to your Android device and open it (enable **Install from
-unknown sources** for your file manager/browser if prompted) to install.
-
-### Optional: build a smaller, split APK per architecture
+From the project root, the **recommended** command (see "APK size" below
+for why):
 
 ```bash
 flutter build apk --release --split-per-abi
 ```
 
-Produces smaller per-ABI APKs in the same output folder — useful for
-distributing outside the Play Store to save download size.
+This produces three smaller, architecture-specific APKs instead of one
+large universal one:
+
+```
+build/app/outputs/flutter-apk/app-arm64-v8a-release.apk    (most modern phones — try this first)
+build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk  (older 32-bit phones)
+build/app/outputs/flutter-apk/app-x86_64-release.apk       (rare — x86 devices/emulators)
+```
+
+Each one is fully self-contained and installs exactly like any other
+APK — copy the matching file to your phone (`arm64-v8a` covers the vast
+majority of phones from the last ~8 years) and open it (enable **Install
+from unknown sources** for your file manager/browser if prompted).
+
+If you'd rather have a single universal file that installs on any device
+(larger, but simpler to share):
+
+```bash
+flutter build apk --release
+```
+
+Output:
+```
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+### APK size
+
+A few things keep this build lean without touching any feature or
+behavior:
+- **`--split-per-abi`** (above) is the single biggest win — a universal
+  APK bundles native code for every CPU architecture; splitting means
+  each device only downloads the one it actually needs, typically
+  roughly halving the file size.
+- **`minifyEnabled true` / `shrinkResources true`** are already set in
+  `android/app/build.gradle`, so R8 strips unused code and resources
+  from every release build automatically.
+- **No unused dependencies** — `cupertino_icons` was removed since the
+  app only uses Material icons, and the earlier `math_expressions`
+  package was already dropped when the calculation engine was rewritten.
+- Flutter's release builds automatically tree-shake icon fonts (unused
+  Material icon glyphs are stripped) and strip debug symbols — no
+  action needed, both are on by default for `--release`.
+
+If you want to go further for a public release, two optional flags trim
+a bit more at the cost of build complexity (you'd need to keep the
+generated `symbols/` folder to de-obfuscate any future crash reports):
+```bash
+flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols
+```
 
 ### Optional: build an `.aab` for Play Store upload
 

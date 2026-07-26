@@ -13,7 +13,7 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static Database? _db;
-  static const int _dbVersion = 2;
+  static const int _dbVersion = 3;
 
   Future<Database> get database async {
     _db ??= await _initDatabase();
@@ -32,7 +32,21 @@ class DatabaseHelper {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
+          // History table didn't exist yet — create it fresh with the
+          // *current* schema (already includes sheetId), so no separate
+          // ALTER is needed for databases coming straight from v1.
           await db.execute(CalculationHistoryEntry.createTableSql);
+        } else if (oldVersion < 3) {
+          // History table already existed (from v2) without sheetId.
+          await db.execute(
+            'ALTER TABLE ${CalculationHistoryEntry.tableName} ADD COLUMN sheetId INTEGER',
+          );
+        }
+        if (oldVersion < 3) {
+          // Sheets table has existed since v1, but without description.
+          await db.execute(
+            "ALTER TABLE ${CalculationSheet.tableName} ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+          );
         }
       },
     );
@@ -71,25 +85,24 @@ class DatabaseHelper {
     );
   }
 
-  /// Renames a sheet's title only.
-  Future<int> renameSheet(int id, String newTitle) async {
-    final db = await database;
-    return db.update(
-      CalculationSheet.tableName,
-      {'title': newTitle},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  /// Deletes a sheet by id.
+  /// Deletes a sheet by id, along with any history entries scoped to it
+  /// (that sheet's own History would otherwise be orphaned — pointing at
+  /// a sheetId that no longer exists — once the sheet itself is gone).
   Future<int> deleteSheet(int id) async {
     final db = await database;
-    return db.delete(
+    final batch = db.batch();
+    batch.delete(
+      CalculationHistoryEntry.tableName,
+      where: 'sheetId = ?',
+      whereArgs: [id],
+    );
+    batch.delete(
       CalculationSheet.tableName,
       where: 'id = ?',
       whereArgs: [id],
     );
+    final results = await batch.commit();
+    return results.last as int;
   }
 
   /// Persists a new manual ordering for a batch of sheets. Called after
@@ -166,8 +179,20 @@ class DatabaseHelper {
     );
   }
 
-  Future<void> clearHistory() async {
+  /// Clears history. Pass `sheetId: null` to clear only the *general*
+  /// history (calculations made outside any sheet), or a specific id to
+  /// clear only that sheet's own history — never both at once, so
+  /// clearing one never touches the other.
+  Future<void> clearHistory({required int? sheetId}) async {
     final db = await database;
-    await db.delete(CalculationHistoryEntry.tableName);
+    if (sheetId == null) {
+      await db.delete(CalculationHistoryEntry.tableName, where: 'sheetId IS NULL');
+    } else {
+      await db.delete(
+        CalculationHistoryEntry.tableName,
+        where: 'sheetId = ?',
+        whereArgs: [sheetId],
+      );
+    }
   }
 }

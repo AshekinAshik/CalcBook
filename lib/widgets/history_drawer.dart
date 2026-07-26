@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/calculation_history_entry.dart';
+import '../models/calculation_sheet.dart';
 import '../providers/calculator_provider.dart';
 import 'drawer_grabber.dart';
 
-/// The History drawer — every calculation the user has evaluated with
-/// "=" is logged here automatically, independent of the deliberately
-/// curated Calculation Sheets. Supports tap-to-reuse, swipe-to-delete
-/// per entry, and a "Clear all" action.
+/// The History drawer. It's context-aware: when no sheet is currently
+/// loaded it shows *General* history (every calculation made outside
+/// any sheet); when a sheet is active it shows *that sheet's own*
+/// history instead — two logically separate lists that never mix.
+/// Supports tap-to-reuse, swipe-to-delete per entry, and "Clear all"
+/// scoped to whichever list is showing.
 class HistoryDrawer extends StatelessWidget {
   const HistoryDrawer({super.key});
 
@@ -28,6 +31,15 @@ class HistoryDrawer extends StatelessWidget {
     final vm = context.watch<CalculatorProvider>();
     final scheme = Theme.of(context).colorScheme;
 
+    final CalculationSheet? scopedSheet = vm.activeSheetId == null
+        ? null
+        : vm.sheets.where((s) => s.id == vm.activeSheetId).firstOrNull;
+    final entries = scopedSheet == null
+        ? vm.generalHistory
+        : vm.sheetHistory(scopedSheet.id!);
+
+    final headerTitle = scopedSheet == null ? 'History' : 'Sheet History';
+
     return DraggableScrollableSheet(
       initialChildSize: 0.65,
       minChildSize: 0.4,
@@ -38,40 +50,56 @@ class HistoryDrawer extends StatelessWidget {
           children: [
             const DrawerGrabber(),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 4),
               child: Row(
                 children: [
                   Icon(Icons.history, color: scheme.onSurfaceVariant),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'History',
+                      headerTitle,
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
-                  if (vm.history.isNotEmpty)
+                  if (entries.isNotEmpty)
                     TextButton.icon(
-                      onPressed: () => _confirmClearAll(context, vm),
+                      onPressed: () =>
+                          _confirmClearAll(context, vm, scopedSheet),
                       icon: const Icon(Icons.delete_sweep_outlined, size: 18),
                       label: const Text('Clear all'),
                     ),
                 ],
               ),
             ),
+            if (scopedSheet != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Calculations made in "${scopedSheet.title}"',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.outline,
+                        ),
+                  ),
+                ),
+              ),
             const Divider(height: 1),
             Expanded(
-              child: vm.history.isEmpty
-                  ? _EmptyState(scrollController: scrollController)
+              child: entries.isEmpty
+                  ? _EmptyState(
+                      scrollController: scrollController,
+                      isScoped: scopedSheet != null,
+                    )
                   : ListView.builder(
                       controller: scrollController,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
                         vertical: 8,
                       ),
-                      itemCount: vm.history.length,
+                      itemCount: entries.length,
                       itemBuilder: (context, index) {
-                        final entry = vm.history[index];
-                        return _HistoryTile(entry: entry);
+                        return _HistoryTile(entry: entries[index]);
                       },
                     ),
             ),
@@ -84,14 +112,17 @@ class HistoryDrawer extends StatelessWidget {
   Future<void> _confirmClearAll(
     BuildContext context,
     CalculatorProvider vm,
+    CalculationSheet? scopedSheet,
   ) async {
+    final message = scopedSheet == null
+        ? 'This removes every logged General calculation. Sheets and their own history are not affected.'
+        : 'This removes every logged calculation for "${scopedSheet.title}". Other sheets, General history, and the sheet itself are not affected.';
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear all history?'),
-        content: const Text(
-          'This removes every logged calculation. Saved Sheets are not affected.',
-        ),
+        content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -108,14 +139,19 @@ class HistoryDrawer extends StatelessWidget {
       ),
     );
     if (confirmed == true) {
-      await vm.clearHistory();
+      if (scopedSheet == null) {
+        await vm.clearGeneralHistory();
+      } else {
+        await vm.clearSheetHistory(scopedSheet.id!);
+      }
     }
   }
 }
 
 class _EmptyState extends StatelessWidget {
   final ScrollController scrollController;
-  const _EmptyState({required this.scrollController});
+  final bool isScoped;
+  const _EmptyState({required this.scrollController, required this.isScoped});
 
   @override
   Widget build(BuildContext context) {
@@ -128,7 +164,7 @@ class _EmptyState extends StatelessWidget {
         const SizedBox(height: 12),
         Center(
           child: Text(
-            'No calculations yet',
+            isScoped ? 'No calculations in this sheet yet' : 'No calculations yet',
             style: Theme.of(context)
                 .textTheme
                 .bodyLarge
@@ -138,7 +174,9 @@ class _EmptyState extends StatelessWidget {
         const SizedBox(height: 4),
         Center(
           child: Text(
-            'Every result you calculate shows up here automatically',
+            isScoped
+                ? 'Calculate something while this sheet is open and it\'ll show up here'
+                : 'Every result you calculate outside a sheet shows up here automatically',
             textAlign: TextAlign.center,
             style: Theme.of(context)
                 .textTheme
@@ -204,9 +242,6 @@ class _HistoryTile extends StatelessWidget {
               fontSize: 14,
             ),
           ),
-          // Explicit onSurface color — this previously had no color set
-          // at all, which relied on an ambient default that read poorly
-          // against the card's surfaceContainerLow fill in dark mode.
           subtitle: Text(
             '= ${entry.result}',
             style: TextStyle(
@@ -227,4 +262,8 @@ class _HistoryTile extends StatelessWidget {
       ),
     );
   }
+}
+
+extension _FirstOrNull<T> on Iterable<T> {
+  T? get firstOrNull => isEmpty ? null : first;
 }

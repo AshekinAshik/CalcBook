@@ -27,21 +27,38 @@ class AppTheme {
   }
 
   static ThemeData _base(ColorScheme scheme) {
-    final textTheme = GoogleFonts.interTextTheme().copyWith(
+    // Build the base theme from the ColorScheme *first* — this is what
+    // gives Flutter's own text theme correctly brightness-aware colors
+    // (onSurface-derived, not a fixed black/white). The previous version
+    // called `GoogleFonts.interTextTheme()` with no base argument, which
+    // silently defaults to a fixed light-mode/black-text baseline no
+    // matter the app's actual brightness — every Text widget that didn't
+    // explicitly override its own color (dialog titles, drawer headers,
+    // list content, etc.) was rendering near-black text even in dark
+    // mode. Passing `base.textTheme` into GoogleFonts here fixes that at
+    // the root: GoogleFonts only swaps the font family/weight and keeps
+    // the color it's given.
+    final base = ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      brightness: scheme.brightness,
+    );
+
+    final textTheme = GoogleFonts.interTextTheme(base.textTheme).copyWith(
       displayLarge: GoogleFonts.jetBrainsMono(
         fontSize: 56,
         fontWeight: FontWeight.w300,
         letterSpacing: -1,
+        color: scheme.onSurface,
       ),
       displayMedium: GoogleFonts.jetBrainsMono(
         fontSize: 34,
         fontWeight: FontWeight.w400,
+        color: scheme.onSurface,
       ),
     );
 
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: scheme,
+    return base.copyWith(
       scaffoldBackgroundColor: scheme.surface,
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
@@ -54,6 +71,22 @@ class AppTheme {
           fontWeight: FontWeight.w600,
           color: scheme.onSurface,
         ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: scheme.surfaceContainerHigh,
+        titleTextStyle: GoogleFonts.inter(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: scheme.onSurface,
+        ),
+        contentTextStyle: GoogleFonts.inter(
+          fontSize: 14,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+      listTileTheme: ListTileThemeData(
+        textColor: scheme.onSurface,
+        iconColor: scheme.onSurfaceVariant,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(

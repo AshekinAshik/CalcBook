@@ -60,16 +60,29 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         context.select<CalculatorProvider, int>((vm) => vm.sheets.length);
     final isScientificMode = context
         .select<CalculatorProvider, bool>((vm) => vm.isScientificMode);
+    final isSheetActive =
+        context.select<CalculatorProvider, bool>((vm) => vm.activeSheetId != null);
     final dragFraction = (_dragExtent / _dragThreshold).clamp(0.0, 1.0);
+    final historyTooltip = isSheetActive
+        ? 'Sheet History — swipe up on the display, or tap here'
+        : 'History — swipe up on the display, or tap here';
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: AppTheme.systemOverlayStyle(scheme),
       child: Scaffold(
+        // This screen has no text inputs of its own — every TextField
+        // lives inside a dialog or bottom sheet, which already handles
+        // its own keyboard avoidance independently. Without this, the
+        // background calculator (behind an open "Edit sheet" dialog,
+        // say) would visibly shift/resize upward whenever that dialog's
+        // TextField gained focus and the keyboard appeared, even though
+        // only the dialog on top actually needed to move.
+        resizeToAvoidBottomInset: false,
         appBar: AppBar(
           title: const Text('CalcBook'),
           actions: [
             IconButton(
-              tooltip: 'History — swipe up on the display, or tap here',
+              tooltip: historyTooltip,
               icon: const Icon(Icons.history),
               onPressed: () => HistoryDrawer.show(context),
             ),
@@ -139,7 +152,10 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                         right: 0,
                         bottom: 6,
                         child: IgnorePointer(
-                          child: _HistoryPeekHandle(dragFraction: dragFraction),
+                          child: _HistoryPeekHandle(
+                            dragFraction: dragFraction,
+                            isSheetActive: isSheetActive,
+                          ),
                         ),
                       ),
                     ],
@@ -174,11 +190,16 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
 /// + icon) so there's no ambiguity about what's about to open.
 class _HistoryPeekHandle extends StatelessWidget {
   final double dragFraction;
-  const _HistoryPeekHandle({required this.dragFraction});
+  final bool isSheetActive;
+  const _HistoryPeekHandle({
+    required this.dragFraction,
+    required this.isSheetActive,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final label = isSheetActive ? 'Sheet History' : 'History';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -196,7 +217,7 @@ class _HistoryPeekHandle extends StatelessWidget {
                 Icon(Icons.history, size: 16, color: scheme.primary),
                 const SizedBox(width: 4),
                 Text(
-                  'History',
+                  label,
                   style: TextStyle(
                     color: scheme.primary,
                     fontSize: 12,

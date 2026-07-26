@@ -30,29 +30,38 @@ class DisplayPanel extends StatelessWidget {
           if (activeSheet != null)
             Align(
               alignment: Alignment.centerLeft,
-              child: Chip(
-                label: Text(
-                  activeSheet.title,
-                  // Explicit "on" color for the custom backgroundColor
-                  // below — Chip's default label style doesn't always
-                  // auto-adapt contrast for a manually-set background,
-                  // which is what caused low-contrast text in dark mode.
-                  style: TextStyle(color: scheme.onSecondaryContainer),
+              child: ConstrainedBox(
+                // Long sheet titles need somewhere to stop — without a
+                // bounded width here, Text's overflow:ellipsis has
+                // nothing to ellipsize against, and the chip could
+                // overflow the screen horizontally.
+                constraints: const BoxConstraints(maxWidth: 220),
+                child: Chip(
+                  label: Text(
+                    activeSheet.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // Explicit "on" color for the custom backgroundColor
+                    // below — Chip's default label style doesn't always
+                    // auto-adapt contrast for a manually-set background,
+                    // which is what caused low-contrast text in dark mode.
+                    style: TextStyle(color: scheme.onSecondaryContainer),
+                  ),
+                  avatar: Icon(
+                    Icons.description_outlined,
+                    size: 16,
+                    color: scheme.onSecondaryContainer,
+                  ),
+                  deleteIcon: Icon(
+                    Icons.close,
+                    size: 16,
+                    color: scheme.onSecondaryContainer,
+                  ),
+                  onDeleted: vm.exitActiveSheet,
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: scheme.secondaryContainer,
+                  side: BorderSide.none,
                 ),
-                avatar: Icon(
-                  Icons.description_outlined,
-                  size: 16,
-                  color: scheme.onSecondaryContainer,
-                ),
-                deleteIcon: Icon(
-                  Icons.close,
-                  size: 16,
-                  color: scheme.onSecondaryContainer,
-                ),
-                onDeleted: vm.exitActiveSheet,
-                visualDensity: VisualDensity.compact,
-                backgroundColor: scheme.secondaryContainer,
-                side: BorderSide.none,
               ),
             ),
           const SizedBox(height: 14),

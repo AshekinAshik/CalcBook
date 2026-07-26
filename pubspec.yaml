@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.6
 
   # State management
   provider: ^6.1.2
@@ -25,6 +24,12 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Lets widget/unit tests actually exercise CalculatorProvider's sqflite
+  # calls. Plain `flutter test` has no platform channel for sqflite (only
+  # a real device or `flutter test integration_test` does) — this swaps
+  # in a pure-Dart SQLite implementation for the test run only; the real
+  # app on-device is unaffected and keeps using the normal sqflite plugin.
+  sqflite_common_ffi: ^2.3.4
 
 flutter:
   uses-material-design: true

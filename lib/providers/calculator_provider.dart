@@ -17,6 +17,11 @@ class CalculatorProvider extends ChangeNotifier {
   bool _isScientificMode = false;
   int? _activeSheetId; // non-null while a saved sheet is loaded & unsaved-clean
   List<CalculationSheet> _sheets = [];
+
+  // All history rows (both general and every sheet's), kept in one small
+  // in-memory cache — capped at [CalculationHistoryEntry.maxEntries], so
+  // filtering it in memory per-scope (see [generalHistory]/[sheetHistory])
+  // is cheap and avoids extra DB round-trips every time a drawer opens.
   List<CalculationHistoryEntry> _history = [];
 
   String get expression => _expression;
@@ -24,7 +29,14 @@ class CalculatorProvider extends ChangeNotifier {
   bool get isScientificMode => _isScientificMode;
   int? get activeSheetId => _activeSheetId;
   List<CalculationSheet> get sheets => List.unmodifiable(_sheets);
-  List<CalculationHistoryEntry> get history => List.unmodifiable(_history);
+
+  /// History of calculations made outside any sheet ("free" mode).
+  List<CalculationHistoryEntry> get generalHistory =>
+      _history.where((h) => h.sheetId == null).toList();
+
+  /// History of calculations made while a specific sheet was active.
+  List<CalculationHistoryEntry> sheetHistory(int sheetId) =>
+      _history.where((h) => h.sheetId == sheetId).toList();
 
   CalculatorProvider() {
     _loadSheets();
@@ -32,12 +44,26 @@ class CalculatorProvider extends ChangeNotifier {
   }
 
   Future<void> _loadSheets() async {
-    _sheets = await _db.getAllSheets();
+    try {
+      _sheets = await _db.getAllSheets();
+    } catch (e) {
+      // Worst-case fallback: start with an empty list rather than crash
+      // the whole app on launch over a DB-open failure. Sheets already
+      // on disk aren't lost — this only affects the in-memory list for
+      // this session; the next successful load picks them back up.
+      debugPrint('CalcBook: failed to load sheets: $e');
+      _sheets = [];
+    }
     notifyListeners();
   }
 
   Future<void> _loadHistory() async {
-    _history = await _db.getAllHistory();
+    try {
+      _history = await _db.getAllHistory();
+    } catch (e) {
+      debugPrint('CalcBook: failed to load history: $e');
+      _history = [];
+    }
     notifyListeners();
   }
 
@@ -48,9 +74,54 @@ class CalculatorProvider extends ChangeNotifier {
 
   /// Appends a token (digit, operator, function, parenthesis) to the
   /// live expression trail and re-evaluates the preview result.
+  ///
+  /// Two input-level guards keep the expression well-formed, matching
+  /// standard calculator-app behavior:
+  ///  - A second decimal point within the same number is ignored rather
+  ///    than appended. Without this, something like "1.2.3" would reach
+  ///    the parser as two adjacent number literals ("1.2" and ".3"),
+  ///    which implicit multiplication support would silently turn into
+  ///    "1.2 × 0.3" — a wrong *answer*, not just a rejected input, which
+  ///    is worse than simply blocking the second '.' at entry time.
+  ///  - Pressing ×, ÷, or ^ immediately after another operator replaces
+  ///    the trailing one instead of stacking a second (e.g. "5+" then
+  ///    tapping × corrects to "5×", not the dead-end "5+×"). + and − are
+  ///    deliberately never *replaced by* this, nor do they ever trigger
+  ///    replacing what came before them — they have valid unary/prefix
+  ///    meaning in the grammar ("5×-3", "5^-3", "5^+3" are all
+  ///    legitimate and already evaluate correctly), whereas ×, ÷, and ^
+  ///    never do, so only *they* get this treatment.
   void appendToken(String token) {
+    const nonUnaryOps = {'×', '÷', '^'};
+    const replaceableTrailing = {'+', '-', '×', '÷', '^'};
+
+    if (nonUnaryOps.contains(token) &&
+        _expression.isNotEmpty &&
+        replaceableTrailing.contains(_expression[_expression.length - 1])) {
+      _expression = _expression.substring(0, _expression.length - 1) + token;
+      _recompute();
+      return;
+    }
+
+    if (token == '.' && _currentNumberHasDecimal()) {
+      return;
+    }
+
     _expression += token;
     _recompute();
+  }
+
+  /// Whether the number currently being typed (the run of digits back
+  /// to the last operator/parenthesis/function) already contains a '.'.
+  bool _currentNumberHasDecimal() {
+    for (var i = _expression.length - 1; i >= 0; i--) {
+      final c = _expression[i];
+      if (c == '.') return true;
+      final code = c.codeUnitAt(0);
+      final isDigit = code >= 48 && code <= 57;
+      if (!isDigit) break;
+    }
+    return false;
   }
 
   void backspace() {
@@ -62,13 +133,19 @@ class CalculatorProvider extends ChangeNotifier {
   void clearAll() {
     _expression = '';
     _liveResult = '';
-    _activeSheetId = null;
+    // Deliberately does NOT touch _activeSheetId — "AC" clears the
+    // display, nothing more. Exiting a sheet is its own explicit action
+    // (the × on the sheet chip / exitActiveSheet()); AC silently doing
+    // the same thing as a side effect would mean clearing a mistyped
+    // number could unexpectedly detach you from the sheet you were
+    // working in.
     notifyListeners();
   }
 
   /// Evaluates and "commits" the current expression, replacing it with
   /// its final result (standard calculator '=' behavior), and silently
-  /// logs the calculation to History.
+  /// logs the calculation to History — scoped to whichever sheet is
+  /// currently active, or to General history if none is.
   void evaluateEquals() {
     if (_expression.trim().isEmpty) return;
     final result = ExpressionEvaluator.evaluate(_expression);
@@ -90,6 +167,7 @@ class CalculatorProvider extends ChangeNotifier {
       expression: expression,
       result: result,
       timestamp: DateTime.now(),
+      sheetId: _activeSheetId,
     );
     await _db.insertHistoryEntry(entry);
     _history = await _db.getAllHistory();
@@ -103,18 +181,19 @@ class CalculatorProvider extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------
-  // Calculation Sheets — save / reload / rename / delete / reorder
+  // Calculation Sheets — save / reload / edit / delete / reorder
   // ---------------------------------------------------------------------
 
   /// Saves the current live expression trail as a brand-new independent
   /// sheet ("Calculation Sheets" — the core innovation of the app).
-  Future<void> saveCurrentAsNewSheet({String? title}) async {
+  Future<void> saveCurrentAsNewSheet({String? title, String? description}) async {
     if (_expression.trim().isEmpty) return;
     final order = await _db.nextDisplayOrder();
     final sheet = CalculationSheet(
       title: title?.trim().isNotEmpty == true
-          ? title!.trim()
+          ? _clampTitle(title!.trim())
           : 'Sheet ${_sheets.length + 1}',
+      description: _clampDescription(description),
       expression: _expression,
       displayOrder: order,
     );
@@ -122,6 +201,17 @@ class CalculatorProvider extends ChangeNotifier {
     _sheets = [..._sheets, saved];
     _activeSheetId = saved.id;
     notifyListeners();
+  }
+
+  static String _clampTitle(String title) {
+    if (title.length <= CalculationSheet.maxTitleLength) return title;
+    return title.substring(0, CalculationSheet.maxTitleLength);
+  }
+
+  static String _clampDescription(String? description) {
+    final trimmed = (description ?? '').trim();
+    if (trimmed.length <= CalculationSheet.maxDescriptionLength) return trimmed;
+    return trimmed.substring(0, CalculationSheet.maxDescriptionLength);
   }
 
   /// Reloads a saved sheet's expression back into the active calculator
@@ -150,27 +240,41 @@ class CalculatorProvider extends ChangeNotifier {
   /// Detaches the calculator from the currently loaded sheet, returning
   /// to plain "free calculation" mode — the current expression is left
   /// untouched, only the sheet association is cleared. From this point,
-  /// further "=" evaluations log to History as normal, with no implied
-  /// tie to the sheet you just left.
+  /// further "=" evaluations log to General history, and swipe-up opens
+  /// General history instead of that sheet's history.
   void exitActiveSheet() {
     if (_activeSheetId == null) return;
     _activeSheetId = null;
     notifyListeners();
   }
 
-  Future<void> renameSheet(int id, String newTitle) async {
-    if (newTitle.trim().isEmpty) return;
-    await _db.renameSheet(id, newTitle.trim());
+  /// Updates a sheet's title and/or description (used by the "Edit
+  /// sheet" dialog). Both fields are set together since they're edited
+  /// in the same dialog.
+  Future<void> updateSheetDetails(
+    int id, {
+    required String title,
+    required String description,
+  }) async {
     final idx = _sheets.indexWhere((s) => s.id == id);
-    if (idx != -1) {
-      _sheets[idx] = _sheets[idx].copyWith(title: newTitle.trim());
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) return;
+    final updated = _sheets[idx].copyWith(
+      title: _clampTitle(trimmedTitle),
+      description: _clampDescription(description),
+    );
+    await _db.updateSheet(updated);
+    _sheets[idx] = updated;
+    notifyListeners();
   }
 
+  /// Deletes a sheet and its own history (handled together at the DB
+  /// layer so the sheet's history never outlives the sheet).
   Future<void> deleteSheet(int id) async {
     await _db.deleteSheet(id);
     _sheets = _sheets.where((s) => s.id != id).toList();
+    _history = _history.where((h) => h.sheetId != id).toList();
     if (_activeSheetId == id) _activeSheetId = null;
     notifyListeners();
   }
@@ -198,10 +302,12 @@ class CalculatorProvider extends ChangeNotifier {
   // ---------------------------------------------------------------------
 
   /// Loads a past calculation's expression back into the active
-  /// calculator so the user can tweak or continue from it.
+  /// calculator so the user can tweak or continue from it. Deliberately
+  /// leaves [activeSheetId] untouched — you can only be viewing a given
+  /// history list (General or a specific sheet's) while already in that
+  /// exact context, so there's nothing to change.
   void reuseHistoryEntry(CalculationHistoryEntry entry) {
     _expression = entry.expression;
-    _activeSheetId = null;
     _recompute();
   }
 
@@ -211,9 +317,17 @@ class CalculatorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> clearHistory() async {
-    await _db.clearHistory();
-    _history = [];
+  /// Clears only General history (calculations made outside any sheet).
+  Future<void> clearGeneralHistory() async {
+    await _db.clearHistory(sheetId: null);
+    _history = _history.where((h) => h.sheetId != null).toList();
+    notifyListeners();
+  }
+
+  /// Clears only the given sheet's own history.
+  Future<void> clearSheetHistory(int sheetId) async {
+    await _db.clearHistory(sheetId: sheetId);
+    _history = _history.where((h) => h.sheetId != sheetId).toList();
     notifyListeners();
   }
 }

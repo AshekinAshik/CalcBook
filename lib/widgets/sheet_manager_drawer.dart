@@ -7,9 +7,10 @@ import 'drawer_grabber.dart';
 
 /// The Sheet Manager — a Material 3 modal bottom sheet listing all saved
 /// Calculation Sheets. Supports:
-///   - Saving the current expression as a new sheet
+///   - Saving the current expression as a new sheet (title + optional
+///     short description)
 ///   - Reloading a sheet back into the active calculator
-///   - Inline rename
+///   - Editing a sheet's title and description via a dedicated dialog
 ///   - Delete
 ///   - Drag-to-reorder (persists displayOrder)
 class SheetManagerDrawer extends StatelessWidget {
@@ -49,13 +50,34 @@ class SheetManagerDrawer extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
-                  FilledButton.tonalIcon(
-                    onPressed: vm.expression.trim().isEmpty
-                        ? null
-                        : () => _promptSaveNewSheet(context, vm),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Save current'),
-                  ),
+                  if (vm.activeSheetId != null) ...[
+                    // A sheet is loaded — the primary action is now
+                    // updating *that* sheet in place (previously there
+                    // was no way to persist changes back into a reloaded
+                    // sheet at all, only ever create a new one).
+                    FilledButton.tonalIcon(
+                      onPressed: vm.expression.trim().isEmpty
+                          ? null
+                          : () => _updateActiveSheet(context, vm),
+                      icon: const Icon(Icons.save_outlined, size: 18),
+                      label: const Text('Update sheet'),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'Save as a new sheet instead',
+                      onPressed: vm.expression.trim().isEmpty
+                          ? null
+                          : () => _promptSaveNewSheet(context, vm),
+                      icon: const Icon(Icons.add),
+                    ),
+                  ] else
+                    FilledButton.tonalIcon(
+                      onPressed: vm.expression.trim().isEmpty
+                          ? null
+                          : () => _promptSaveNewSheet(context, vm),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Save current'),
+                    ),
                 ],
               ),
             ),
@@ -93,39 +115,145 @@ class SheetManagerDrawer extends StatelessWidget {
     CalculatorProvider vm,
   ) async {
     final suggestedName = 'Sheet ${vm.sheets.length + 1}';
-    final controller = TextEditingController(text: suggestedName)
-      // Select the suggested name so the first keystroke replaces it
-      // instead of appending to it (this previously produced titles
-      // like "Sheet 1sheet 1" when the user typed their own name).
-      ..selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: suggestedName.length,
-      );
-    final title = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Save as new sheet'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Sheet title'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+    final result = await _showSheetDetailsDialog(
+      context,
+      dialogTitle: 'Save as new sheet',
+      initialTitle: suggestedName,
+      initialDescription: '',
+      selectSuggestedTitle: true,
+      confirmLabel: 'Save',
     );
-    if (title != null) {
-      await vm.saveCurrentAsNewSheet(title: title);
+    if (result != null) {
+      await vm.saveCurrentAsNewSheet(
+        title: result.title,
+        description: result.description,
+      );
     }
   }
+
+  Future<void> _updateActiveSheet(
+    BuildContext context,
+    CalculatorProvider vm,
+  ) async {
+    await vm.saveToActiveSheet();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sheet updated'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+}
+
+/// Small value type carrying the two fields the Sheet Details dialog
+/// collects, so save and edit flows can share one dialog implementation.
+class _SheetDetailsResult {
+  final String title;
+  final String description;
+  const _SheetDetailsResult(this.title, this.description);
+}
+
+/// Shared title+description dialog used for both "Save as new sheet"
+/// and "Edit sheet". Kept as a single implementation so the two flows
+/// can never visually drift apart.
+Future<_SheetDetailsResult?> _showSheetDetailsDialog(
+  BuildContext context, {
+  required String dialogTitle,
+  required String initialTitle,
+  required String initialDescription,
+  required String confirmLabel,
+  bool selectSuggestedTitle = false,
+}) {
+  final titleController = TextEditingController(text: initialTitle);
+  if (selectSuggestedTitle) {
+    // Select the suggested name so the first keystroke replaces it
+    // instead of appending to it (previously produced titles like
+    // "Sheet 1sheet 1" when typing over an unselected default).
+    titleController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: initialTitle.length,
+    );
+  }
+  final descriptionController = TextEditingController(text: initialDescription);
+
+  return showDialog<_SheetDetailsResult>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        final isTitleEmpty = titleController.text.trim().isEmpty;
+        return AlertDialog(
+          title: Text(dialogTitle),
+          // Fixed, landscape-ratio content box (wider than tall) instead
+          // of letting the dialog auto-size to its content — without
+          // this, the description field's maxLength counter text
+          // ("123/250") could make the dialog's intrinsic width grow
+          // while typing. SingleChildScrollView keeps this safe against
+          // overflow (e.g. when the keyboard shrinks available vertical
+          // space) without needing the box itself to grow.
+          content: SizedBox(
+            width: 360,
+            height: 200,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    autofocus: true,
+                    maxLength: CalculationSheet.maxTitleLength,
+                    // Reactively validated below — this used to fail
+                    // silently: confirming with an empty title closed
+                    // the dialog with no error and no change saved,
+                    // leaving the user thinking it had worked.
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'Sheet title',
+                      errorText: isTitleEmpty ? 'Title is required' : null,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descriptionController,
+                    // Kept short and capped so the description never
+                    // dominates the dialog or the list — it's a note,
+                    // not a document.
+                    maxLines: 3,
+                    minLines: 2,
+                    maxLength: CalculationSheet.maxDescriptionLength,
+                    decoration: const InputDecoration(
+                      labelText: 'Description (optional)',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isTitleEmpty
+                  ? null
+                  : () => Navigator.pop(
+                        context,
+                        _SheetDetailsResult(
+                          titleController.text,
+                          descriptionController.text,
+                        ),
+                      ),
+              child: Text(confirmLabel),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class _EmptyState extends StatelessWidget {
@@ -165,36 +293,26 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _SheetTile extends StatefulWidget {
+class _SheetTile extends StatelessWidget {
   final CalculationSheet sheet;
   final bool isActive;
   const _SheetTile({super.key, required this.sheet, required this.isActive});
 
-  @override
-  State<_SheetTile> createState() => _SheetTileState();
-}
-
-class _SheetTileState extends State<_SheetTile> {
-  bool _isRenaming = false;
-  late final TextEditingController _renameController;
-
-  @override
-  void initState() {
-    super.initState();
-    _renameController = TextEditingController(text: widget.sheet.title);
-  }
-
-  @override
-  void dispose() {
-    _renameController.dispose();
-    super.dispose();
-  }
-
-  void _commitRename(CalculatorProvider vm) {
-    if (widget.sheet.id != null) {
-      vm.renameSheet(widget.sheet.id!, _renameController.text);
+  Future<void> _editSheet(BuildContext context, CalculatorProvider vm) async {
+    final result = await _showSheetDetailsDialog(
+      context,
+      dialogTitle: 'Edit sheet',
+      initialTitle: sheet.title,
+      initialDescription: sheet.description,
+      confirmLabel: 'Save changes',
+    );
+    if (result != null && sheet.id != null) {
+      await vm.updateSheetDetails(
+        sheet.id!,
+        title: result.title,
+        description: result.description,
+      );
     }
-    setState(() => _isRenaming = false);
   }
 
   @override
@@ -206,63 +324,69 @@ class _SheetTileState extends State<_SheetTile> {
     // on ambient/default text color caused low-contrast text in dark
     // mode when the card used a custom secondaryContainer fill.
     final onTileColor =
-        widget.isActive ? scheme.onSecondaryContainer : scheme.onSurface;
-    final onTileVariant = widget.isActive
+        isActive ? scheme.onSecondaryContainer : scheme.onSurface;
+    final onTileVariant = isActive
         ? scheme.onSecondaryContainer.withValues(alpha: 0.75)
         : scheme.onSurfaceVariant;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       elevation: 0,
-      color: widget.isActive
-          ? scheme.secondaryContainer
-          : scheme.surfaceContainerLow,
+      color: isActive ? scheme.secondaryContainer : scheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         leading: ReorderableDragStartListener(
-          index: vm.sheets.indexOf(widget.sheet),
+          index: vm.sheets.indexOf(sheet),
           child: Icon(Icons.drag_indicator, color: onTileVariant),
         ),
-        title: _isRenaming
-            ? TextField(
-                controller: _renameController,
-                autofocus: true,
-                style: TextStyle(color: onTileColor),
-                decoration: const InputDecoration(isDense: true),
-                onSubmitted: (_) => _commitRename(vm),
-              )
-            : Text(
-                widget.sheet.title,
-                style: TextStyle(fontWeight: FontWeight.w600, color: onTileColor),
-              ),
-        subtitle: Text(
-          widget.sheet.expression,
+        title: Text(
+          sheet.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontFamily: 'monospace', color: onTileVariant),
+          style: TextStyle(fontWeight: FontWeight.w600, color: onTileColor),
+        ),
+        // A compact, capped-height subtitle: the expression preview
+        // (single line) plus the description (up to 2 lines) if present
+        // — kept small and muted so the list stays scannable rather
+        // than clumsy, per the "minimal, standard" goal.
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              sheet.expression,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontFamily: 'monospace', color: onTileVariant),
+            ),
+            if (sheet.description.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  sheet.description,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                    color: onTileVariant.withValues(alpha: 0.85),
+                  ),
+                ),
+              ),
+          ],
         ),
         onTap: () {
-          if (_isRenaming) return;
-          vm.reloadSheet(widget.sheet);
+          vm.reloadSheet(sheet);
           Navigator.pop(context);
         },
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: _isRenaming ? 'Confirm rename' : 'Rename',
-              icon: Icon(
-                _isRenaming ? Icons.check : Icons.edit_outlined,
-                color: onTileVariant,
-              ),
-              onPressed: () {
-                if (_isRenaming) {
-                  _commitRename(vm);
-                } else {
-                  setState(() => _isRenaming = true);
-                }
-              },
+              tooltip: 'Edit sheet',
+              icon: Icon(Icons.edit_outlined, color: onTileVariant),
+              onPressed: () => _editSheet(context, vm),
             ),
             IconButton(
               tooltip: 'Delete',
@@ -283,7 +407,9 @@ class _SheetTileState extends State<_SheetTile> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete sheet?'),
-        content: Text('"${widget.sheet.title}" will be permanently removed.'),
+        content: Text(
+          '"${sheet.title}" and its own history will be permanently removed.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -299,8 +425,8 @@ class _SheetTileState extends State<_SheetTile> {
         ],
       ),
     );
-    if (confirmed == true && widget.sheet.id != null) {
-      await vm.deleteSheet(widget.sheet.id!);
+    if (confirmed == true && sheet.id != null) {
+      await vm.deleteSheet(sheet.id!);
     }
   }
 }
